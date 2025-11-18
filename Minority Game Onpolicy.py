@@ -1,7 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from collections import defaultdict
-import warnings
 import time
 from scipy.stats import ttest_1samp, ttest_rel
 import random
@@ -15,9 +13,7 @@ NUM_SIMULATION_RUNS = 1
 ALLOW_STAY_HOME = True 
 single_plot=1
 
-# ===================================================================
-# --- NEW: Global Switches for Learning and Strategy Selection ---
-# ===================================================================
+
 # Set the learning policy: 'ON_POLICY' or 'OFF_POLICY'
 # 'ON_POLICY': Only the strategy used to make a decision is updated.
 # 'OFF_POLICY': All of an agent's strategies are evaluated and updated each round.
@@ -32,26 +28,19 @@ SOFTMAX_TEMP = 0
 # --- Bar Configuration for Multiple Bars ---
 BARS_CONFIG = [
     {
-        "name": "Bar 1 (Non-risky)", 
+        "name": "Bar", 
         "capacity": 50,
         "reward_success": 5, 
         "reward_fail": -5
-    },
-    {
-        "name": "Bar 2 (Risky)", 
-        "capacity": 10,
-        "reward_success": 5, 
-        "reward_fail": -5
-    },
+    }
 ]
 
 # --- Capital and Utility Structure ---
-INITIAL_CAPITAL = 1000.0
+INITIAL_CAPITAL = 1000.0        # By setting capital to 1000, we ignore 'exit' 
+                                # with a reasonable time span
 STAY_HOME_REWARD = 0.0
 STAY_HOME_CHOICE_NAME = "Stay Home"
 
-# --- Strategy & Learning Parameters ---
-NUM_STRATEGIES_PER_AGENT = 10 
 
 # ===================================================================
 # --- STRATEGY DEFINITIONS FOR MULTI-BAR ---
@@ -99,23 +88,17 @@ class Strategy:
         else:
             return min(forecasts, key=forecasts.get)
 
-# --- Unchanged Strategies ---
+# --- Potential Strategies ---
+# 1. Randomly select an option (does not make any prediction)
 class RandomChoiceStrategy(Strategy):
     def __init__(self):
         super().__init__("Random Choice")
     def predict(self, attendance_history, bars_config, choice_names):
         return random.choice(choice_names)
 
-class FixedChoiceStrategy(Strategy):
-    def __init__(self, choice):
-        super().__init__(f"Always Choose '{choice}'")
-        self.choice = choice
-    def predict(self, attendance_history, bars_config, choice_names):
-        return self.choice
-
-# --- Standard Strategies ---
+# 2. Predicts attendance will be the same as last round for EACH bar.
 class MirrorAttendanceStrategy(Strategy):
-    """Predicts attendance will be the same as last round for EACH bar."""
+    
     def __init__(self):
         super().__init__("Predict: A(t) = A(t-1)")
 
@@ -131,8 +114,8 @@ class MirrorAttendanceStrategy(Strategy):
             
         return self._decide_from_forecasts(forecasts, bars_config, choice_names)
 
+# 3. Predicts attendance as the mean of the last K rounds for EACH bar.
 class MeanAttendanceStrategy(Strategy):
-    """Predicts attendance as the mean of the last K rounds for EACH bar."""
     def __init__(self, lookback):
         super().__init__(f"Predict: Mean of Last {lookback}")
         self.lookback = lookback
@@ -150,8 +133,8 @@ class MeanAttendanceStrategy(Strategy):
         
         return self._decide_from_forecasts(forecasts, bars_config, choice_names)
 
+# 4. Predicts the current trend will continue for EACH bar.
 class TrendFollowingStrategy(Strategy):
-    """Predicts the current trend will continue for EACH bar."""
     def __init__(self):
         super().__init__("Predict: Trend Extrapolation")
 
@@ -171,12 +154,9 @@ class TrendFollowingStrategy(Strategy):
             
         return self._decide_from_forecasts(forecasts, bars_config, choice_names)
 
-# --- MULTI-BAR CONTRARIAN STRATEGIES ---
+# 5. Chooses the bar that was most crowded relative to its capacity last round.
+#    The logic is that this bar will be the most avoided by others this round.
 class ContrarianBehaviorStrategy(Strategy):
-    """
-    Chooses the bar that was most crowded relative to its capacity last round.
-    The logic is that this bar will be the most avoided by others this round.
-    """
     def __init__(self):
         super().__init__("Contrarian: Go to Last Round's Most Crowded Bar")
 
@@ -200,44 +180,8 @@ class ContrarianBehaviorStrategy(Strategy):
         
         return most_crowded_bar if most_crowded_bar else random.choice([b['name'] for b in bars_config])
 
-class NormalizedContrarianStrategy(Strategy):
-    """
-    Predicts attendance by inverting last round's attendance for each bar,
-    and then normalizing the results to be logically consistent.
-    """
-    def __init__(self):
-        super().__init__("Contrarian: Normalized Inverse Prediction")
 
-    def predict(self, attendance_history, bars_config, choice_names):
-        forecasts = {}
-        if not attendance_history or len(next(iter(attendance_history.values()))) < 1:
-            bar_names = [bar['name'] for bar in bars_config]
-            return random.choice(bar_names)
-            
-        raw_forecasts = {}
-        total_raw_forecast = 0
-        total_goers_last_round = 0
-
-        for bar in bars_config:
-            name = bar['name']
-            last_attendance = attendance_history[name][-1]
-            total_goers_last_round += last_attendance
-            forecast = NUM_AGENTS - last_attendance
-            raw_forecasts[name] = forecast
-            total_raw_forecast += forecast
-
-        if total_raw_forecast == 0:
-            bar_names = [bar['name'] for bar in bars_config]
-            return random.choice(bar_names)
-
-        for bar in bars_config:
-            name = bar['name']
-            normalized_forecast = (raw_forecasts[name] / total_raw_forecast) * total_goers_last_round
-            forecasts[name] = normalized_forecast
-        
-        return self._decide_from_forecasts(forecasts, bars_config, choice_names)
-
-# --- Strategy Factory ---
+# --- Strategy Factory: The set of strategies considered by the agents in the model ---
 def strategy_factory(choice_names):
     strategies = [
         MirrorAttendanceStrategy(),
@@ -259,8 +203,7 @@ class Agent:
         self.id = agent_id
         self.capital = INITIAL_CAPITAL
         self.is_active = True
-        num_to_sample = min(NUM_STRATEGIES_PER_AGENT, len(all_possible_strategies))
-        self.strategies = random.sample(all_possible_strategies, num_to_sample)
+        self.strategies = all_possible_strategies
         self.strategy_scores = {s.name: 0.0 for s in self.strategies}
 
     def choose_strategy(self, temp):
@@ -287,13 +230,17 @@ class Agent:
     def update_capital(self, capital_change):
         if self.is_active:
             self.capital += capital_change
+            """
+            If capital is zero or below, the agent becomes inactive
+            """
             if self.capital <= 0:
                 self.is_active = False
                 self.capital = 0
 
     def update_strategy_scores(self, attendance_history, bars_config, choice_names, outcomes, used_strategy_name, policy_type):
         """
-        Updates strategy scores based on outcome. Supports on-policy and off-policy.
+        Updates strategy scores based on outcome.
+        Two updating rules: (1) on-policy and (2) off-policy.
         """
         if not self.is_active: return
 
@@ -365,6 +312,9 @@ class ElFarolMultiBarSimulation:
         return (self.active_agents_history, self.attendance_history, self.stayer_history, self.total_attendance_history)
 
     def _fill_remaining_history(self, current_round):
+        """
+        Inactive agents neither go to a bar nor stay at home
+        """
         num_rounds_to_pad = NUM_ROUNDS - current_round
         for _ in range(num_rounds_to_pad):
             self.active_agents_history.append(0)
