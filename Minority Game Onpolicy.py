@@ -7,12 +7,16 @@ import random
 # --- Game Configuration ---
 NUM_AGENTS = 100
 NUM_ROUNDS = 100
-NUM_SIMULATION_RUNS = 1
+NUM_SIMULATION_RUNS = 50
 
 # --- Control Variable for Stay-Home Option ---
 ALLOW_STAY_HOME = True 
 single_plot=1
 
+# --- Irreversibility Configuration ---
+# Agent must stay at a chosen bar for this many periods.
+# Set to 1 for no irreversibility.
+IRREVERSIBILITY_PERIODS = 5
 
 # Set the learning policy: 'ON_POLICY' or 'OFF_POLICY'
 # 'ON_POLICY': Only the strategy used to make a decision is updated.
@@ -25,19 +29,21 @@ POLICY_TYPE = 'ON_POLICY'
 SOFTMAX_TEMP = 0
 # ===================================================================
 
+bar_capacity= 50
+PROBABILITY_WO_HISTORY = [bar_capacity/NUM_AGENTS,  1-(bar_capacity)/NUM_AGENTS]
 # --- Bar Configuration for Multiple Bars ---
 BARS_CONFIG = [
     {
         "name": "Bar", 
-        "capacity": 50,
+        "capacity": bar_capacity,
         "reward_success": 5, 
         "reward_fail": -5
     }
 ]
 
 # --- Capital and Utility Structure ---
-INITIAL_CAPITAL = 1000.0        # By setting capital to 1000, we ignore 'exit' 
-                                # with a reasonable time span
+INITIAL_CAPITAL = 1000.0        # By setting capital to 1000, ignore 'exit' with a reasonable time span
+                              # If capital is low, many will quickly exit the market.
 STAY_HOME_REWARD = 0.0
 STAY_HOME_CHOICE_NAME = "Stay Home"
 
@@ -94,7 +100,7 @@ class RandomChoiceStrategy(Strategy):
     def __init__(self):
         super().__init__("Random Choice")
     def predict(self, attendance_history, bars_config, choice_names):
-        return random.choice(choice_names)
+        return random.choices(choice_names, PROBABILITY_WO_HISTORY, k=1)[0]
 
 # 2. Predicts attendance will be the same as last round for EACH bar.
 class MirrorAttendanceStrategy(Strategy):
@@ -105,8 +111,7 @@ class MirrorAttendanceStrategy(Strategy):
     def predict(self, attendance_history, bars_config, choice_names):
         forecasts = {}
         if not attendance_history or len(next(iter(attendance_history.values()))) < 1:
-            bar_names = [bar['name'] for bar in bars_config]
-            return random.choice(bar_names)
+            return random.choices(choice_names, PROBABILITY_WO_HISTORY, k=1)[0]
         
         for bar in bars_config:
             name = bar['name']
@@ -123,8 +128,7 @@ class MeanAttendanceStrategy(Strategy):
     def predict(self, attendance_history, bars_config, choice_names):
         forecasts = {}
         if not attendance_history or len(next(iter(attendance_history.values()))) < self.lookback:
-            bar_names = [bar['name'] for bar in bars_config]
-            return random.choice(bar_names)
+            return random.choices(choice_names, PROBABILITY_WO_HISTORY, k=1)[0]
 
         for bar in bars_config:
             name = bar['name']
@@ -141,8 +145,7 @@ class TrendFollowingStrategy(Strategy):
     def predict(self, attendance_history, bars_config, choice_names):
         forecasts = {}
         if not attendance_history or len(next(iter(attendance_history.values()))) < 2:
-            bar_names = [bar['name'] for bar in bars_config]
-            return random.choice(bar_names)
+            return random.choices(choice_names, PROBABILITY_WO_HISTORY, k=1)[0]
             
         for bar in bars_config:
             name = bar['name']
@@ -155,15 +158,14 @@ class TrendFollowingStrategy(Strategy):
         return self._decide_from_forecasts(forecasts, bars_config, choice_names)
 
 # 5. Chooses the bar that was most crowded relative to its capacity last round.
-#    The logic is that this bar will be the most avoided by others this round.
+#    The logic is that this bar will be the most avoided by others this round (So I will choose this bar).
 class ContrarianBehaviorStrategy(Strategy):
     def __init__(self):
         super().__init__("Contrarian: Go to Last Round's Most Crowded Bar")
 
     def predict(self, attendance_history, bars_config, choice_names):
         if not attendance_history or len(next(iter(attendance_history.values()))) < 1:
-            bar_names = [bar['name'] for bar in bars_config]
-            return random.choice(bar_names)
+            return random.choices(choice_names, PROBABILITY_WO_HISTORY, k=1)[0]
 
         most_crowded_bar = None
         max_crowd_ratio = -1.0
@@ -189,8 +191,8 @@ def strategy_factory(choice_names):
         #MeanAttendanceStrategy(lookback=3),
         #MeanAttendanceStrategy(lookback=4),
         #MeanAttendanceStrategy(lookback=5),
-        #ContrarianBehaviorStrategy(),
-        #TrendFollowingStrategy(),
+        ContrarianBehaviorStrategy(),
+        TrendFollowingStrategy(),
     ]
     return strategies
 
@@ -205,6 +207,9 @@ class Agent:
         self.is_active = True
         self.strategies = all_possible_strategies
         self.strategy_scores = {s.name: 0.0 for s in self.strategies}
+        # --- NEW: Attributes for irreversibility ---
+        self.commitment_remaining = 0
+        self.committed_choice = None
 
     def choose_strategy(self, temp):
         """
@@ -243,6 +248,8 @@ class Agent:
         Two updating rules: (1) on-policy and (2) off-policy.
         """
         if not self.is_active: return
+        # --- NEW: If agent was committed, no strategy was used, so no scores are updated. ---
+        if not used_strategy_name: return
 
         strategies_to_update = []
         if policy_type == 'ON_POLICY':
@@ -284,9 +291,27 @@ class ElFarolMultiBarSimulation:
             
             agent_choices = {}
             for agent in active_agents:
-                chosen_strategy_name = agent.choose_strategy(temp=SOFTMAX_TEMP)
-                strategy_obj = next((s for s in agent.strategies if s.name == chosen_strategy_name), None)
-                choice = strategy_obj.predict(self.attendance_history, self.bars_config, self.choice_names) if strategy_obj else random.choice(self.choice_names)
+                # --- MODIFIED: Irreversibility Logic ---
+                if agent.commitment_remaining > 0:
+                    # Agent is committed, so their choice is predetermined.
+                    choice = agent.committed_choice
+                    chosen_strategy_name = None  # No strategy was actively used.
+                    agent.commitment_remaining -= 1
+                    # If commitment ends this round, reset for the next round.
+                    if agent.commitment_remaining == 0:
+                        agent.committed_choice = None
+                else:
+                    # Agent is free to choose.
+                    chosen_strategy_name = agent.choose_strategy(temp=SOFTMAX_TEMP)
+                    strategy_obj = next((s for s in agent.strategies if s.name == chosen_strategy_name), None)
+                    choice = strategy_obj.predict(self.attendance_history, self.bars_config, self.choice_names) if strategy_obj else random.choice(self.choice_names)
+                    
+                    # If the agent chose a bar, set the commitment for future rounds.
+                    if choice in self.bar_names and IRREVERSIBILITY_PERIODS > 1:
+                        agent.commitment_remaining = IRREVERSIBILITY_PERIODS - 1
+                        agent.committed_choice = choice
+                # --- END MODIFICATION ---
+                
                 agent_choices[agent.id] = (choice, chosen_strategy_name)
 
             attendance = {name: 0 for name in self.bar_names}; stayers = 0
@@ -303,6 +328,7 @@ class ElFarolMultiBarSimulation:
                 choice, chosen_strategy_name = agent_choices[agent.id]
                 capital_change = STAY_HOME_REWARD if choice == STAY_HOME_CHOICE_NAME else outcomes.get(choice, 0)
                 agent.update_capital(capital_change)
+                # The update_strategy_scores method now handles the case where chosen_strategy_name is None
                 agent.update_strategy_scores(self.attendance_history, self.bars_config, self.choice_names, outcomes, used_strategy_name=chosen_strategy_name, policy_type=POLICY_TYPE)
 
             for name in self.bar_names: self.attendance_history[name].append(attendance[name])
@@ -457,9 +483,9 @@ class EnsembleRunner:
         stay_home_status = "ENABLED" if self.allow_stay_home else "DISABLED"
         # Modified title for single run
         if self.num_runs == 1:
-            title_suffix = f"(Single Run, Stay Home: {stay_home_status})"
+            title_suffix = f"(Single Run, Stay Home: {stay_home_status}, Irreversibility: {IRREVERSIBILITY_PERIODS})"
         else:
-            title_suffix = f"(Mean over {self.num_runs} Runs, Stay Home: {stay_home_status})"
+            title_suffix = f"(Mean over {self.num_runs} Runs, Stay Home: {stay_home_status}, Irreversibility: {IRREVERSIBILITY_PERIODS})"
         
         colors = plt.cm.viridis(np.linspace(0, 0.8, len(self.bar_names)))
         rounds = range(len(self.ensemble_avg_stayers))
@@ -470,12 +496,12 @@ class EnsembleRunner:
             label = f"Attendance at '{name}'" if self.num_runs == 1 else f"Mean Attendance at '{name}'"
             ax1.plot(rounds, mean_att, label=label, color=colors[i], lw=2)
             ax1.axhline(y=capacity, color=colors[i], linestyle='--', lw=1.5, label=f"Capacity of '{name}' ({capacity})")
-
+        
         if self.allow_stay_home:
             mean_stayers = self.ensemble_avg_stayers
             label = 'Agents Staying Home' if self.num_runs == 1 else 'Mean Agents Staying Home'
             ax1.plot(rounds, mean_stayers, label=label, color='red', lw=2, linestyle=':')
-
+        
         ax1.set_title(f'Population Distribution Choices {title_suffix}', fontsize=16)
         ax1.set_ylabel('Number of Agents', fontsize=12)
         ax1.set_xlabel('Round', fontsize=12)
@@ -509,15 +535,16 @@ class EnsembleRunner:
 if __name__ == '__main__':
     print("="*60)
     print(f"Configuration: Learning Policy = {POLICY_TYPE}, Softmax Temp = {SOFTMAX_TEMP}")
+    print(f"Irreversibility Periods = {IRREVERSIBILITY_PERIODS}")
     print("="*60)
     
     runner = EnsembleRunner(bars_config=BARS_CONFIG, num_runs=NUM_SIMULATION_RUNS, allow_stay_home=ALLOW_STAY_HOME)
     runner.run_all_simulations()
     
     # --- NEWLY ADDED CALL TO DISPLAY THE HISTORY ---
-    runner.display_canonical_run_history()
+    #runner.display_canonical_run_history()
     
-    runner.analyze_and_display_survivors()
-    runner.perform_statistical_tests()
-    runner.display_statistical_results()
+    #runner.analyze_and_display_survivors()
+    #runner.perform_statistical_tests()
+    #runner.display_statistical_results()
     runner.single_plot_results()
