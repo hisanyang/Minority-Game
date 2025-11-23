@@ -29,7 +29,7 @@ POLICY_TYPE = 'ON_POLICY'
 SOFTMAX_TEMP = 0
 # ===================================================================
 
-bar_capacity= 50
+bar_capacity= 60
 PROBABILITY_WO_HISTORY = [bar_capacity/NUM_AGENTS,  1-(bar_capacity)/NUM_AGENTS]
 # --- Bar Configuration for Multiple Bars ---
 BARS_CONFIG = [
@@ -188,9 +188,9 @@ def strategy_factory(choice_names):
     strategies = [
         MirrorAttendanceStrategy(),
         MeanAttendanceStrategy(lookback=2),
-        #MeanAttendanceStrategy(lookback=3),
-        #MeanAttendanceStrategy(lookback=4),
-        #MeanAttendanceStrategy(lookback=5),
+        MeanAttendanceStrategy(lookback=3),
+        MeanAttendanceStrategy(lookback=4),
+        MeanAttendanceStrategy(lookback=5),
         ContrarianBehaviorStrategy(),
         TrendFollowingStrategy(),
     ]
