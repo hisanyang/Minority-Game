@@ -909,9 +909,9 @@ def plot_panel_c_excess_imbalance(N_values, M1=2, M2=10, S=2,
 # ==================================================
 
 if __name__ == "__main__":
-    EXPERIMENT_MODE = 2
+    EXPERIMENT_MODE = 5
 
-    M1, M2 = 2, 10
+    M1, M2 = 2, 8
 
     TOTAL_STEPS = 2000
     EQ_STEPS = 0
@@ -945,8 +945,8 @@ if __name__ == "__main__":
         seed_idx = 0
 
         # Switches for Mode 1 figures
-        RUN_MAIN_MODE1_FIGURES = False
-        RUN_TYPICAL_RUN_FIGURE = True
+        RUN_MAIN_MODE1_FIGURES = True
+        RUN_TYPICAL_RUN_FIGURE = False
 
         # Typical-run settings
         TYPICAL_RUN_N = 185
@@ -1314,7 +1314,7 @@ if __name__ == "__main__":
             total_steps=TOTAL_STEPS,
             eq_steps=EQ_STEPS,
             seed=MASTER_SEED,
-            save_filename="Figure3_PanelA_History_Repetition.png"
+            save_filename=f"Figure3_PanelA_History_Repetition ({M_LOW}, {M_HIGH}).png"
         )
 
         plot_panel_b_imbalance_with_random_benchmark(
@@ -1326,19 +1326,7 @@ if __name__ == "__main__":
             eq_steps=EQ_STEPS,
             trials=TRIALS,
             master_seed=MASTER_SEED,
-            save_filename="Figure3_PanelB_Imbalance_With_Random_Benchmark.png"
-        )
-
-        plot_panel_c_excess_imbalance(
-            N_values=N_values,
-            M1=M_LOW,
-            M2=M_HIGH,
-            S=S_FIXED,
-            total_steps=TOTAL_STEPS,
-            eq_steps=EQ_STEPS,
-            trials=TRIALS,
-            master_seed=MASTER_SEED,
-            save_filename="Figure3_PanelC_Excess_Imbalance.png"
+            save_filename=f"Figure3_PanelB_Imbalance_With_Random_Benchmark ({M_LOW}, {M_HIGH}).png"
         )
 
     else:
