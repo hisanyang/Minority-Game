@@ -15,7 +15,7 @@ dpisize = 400
 ticksize = 14
 labelsize = 16
 titlesize = labelsize + 2
-legendsize = labelsize
+legendsize = ticksize
 
 FIGURES_DIR = Path(__file__).resolve().parent / "Figures"
 
@@ -911,14 +911,17 @@ def plot_panel_c_excess_imbalance(N_values, M1=2, M2=10, S=2,
 if __name__ == "__main__":
     EXPERIMENT_MODE = 2
 
-    M1, M2 = 2, 4
+    M1, M2 = 2, 10
 
     TOTAL_STEPS = 2000
     EQ_STEPS = 0
     TRIALS = 100
     MASTER_SEED = 1
 
-    N_values = np.arange(5, 406, 10)
+    if EXPERIMENT_MODE == 1:
+        N_values = np.arange(5, 406, 10)
+    else:
+        N_values = np.arange(5, 106, 10)
 
     ss = np.random.SeedSequence(MASTER_SEED)
 
